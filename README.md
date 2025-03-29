@@ -4,7 +4,7 @@ Game patchers for TSTO.
 ## How to use
 1. Run tsto_patcher.py in CMD
 ```
-python .\tsto_patcher.py
+python tsto_patcher.py
 ```
 2. Select if you wish to patch an APK (Android) or IPA (IOS)
 3. Click "Browse" and select your APK/IPA
