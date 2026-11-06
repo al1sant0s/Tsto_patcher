@@ -44,6 +44,8 @@ def run_ipa_script(ipa_file, server_url, dlc_url, bundle_id, appname, version, i
 
     app_folder = Path(extracted_folder, "Payload", "Tapped Out.app")
     binary_path = Path(app_folder, "Tapped Out")
+    offline_cfg_path = Path(app_folder, "tsto-offline.cfg")
+    is_offline_bridge = offline_cfg_path.is_file()
 
     try:
         # Replace the app icon if the user supplied one.
@@ -103,82 +105,106 @@ def run_ipa_script(ipa_file, server_url, dlc_url, bundle_id, appname, version, i
                         primary["CFBundleIconFiles"] = files
             plist_data.pop("CFBundleIconName", None)
 
-        new_server_url = ""
-        if "MayhemServerURL" in plist_data:
-            new_server_url = server_url.rstrip("/")
+        if is_offline_bridge:
+            with open(plist_path, "wb") as plist_file:
+                plistlib.dump(plist_data, plist_file)
 
-            old_server_url = plist_data["MayhemServerURL"]
+            status("Step 3/4: Updating tsto-offline.cfg (server + DLC URLs)...")
+            with open(offline_cfg_path, "r", encoding="utf-8", errors="ignore") as f:
+                cfg_lines = f.readlines()
 
-            if len(new_server_url) > len(old_server_url):
-                raise ValueError("New MayhemServerURL is too long. Keep it short.")
+            new_cfg_lines = []
+            for line in cfg_lines:
+                if line.startswith("server="):
+                    new_cfg_lines.append(f"server={server_url.rstrip('/')}\n")
+                elif line.startswith("dlc="):
+                    new_cfg_lines.append(f"dlc={dlc_url.rstrip('/')}\n")
+                else:
+                    new_cfg_lines.append(line)
 
-            plist_data["MayhemServerURL"] = new_server_url
+            with open(offline_cfg_path, "w", encoding="utf-8") as f:
+                f.writelines(new_cfg_lines)
+
+            print(f"Updated {offline_cfg_path} and {plist_path} successfully.")
+            print(f"New server: {server_url.rstrip('/')}")
+            print(f"New dlc: {dlc_url.rstrip('/')}")
         else:
-            print("Key 'MayhemServerURL' not found.")
+            new_server_url = ""
+            if "MayhemServerURL" in plist_data:
+                new_server_url = server_url.rstrip("/")
 
-        new_dlc_url = ""
-        if "DLCLocation" in plist_data:
-            # Store the the DLC URL.
-            plist_data["DLCLocation"] = dlc_url
+                old_server_url = plist_data["MayhemServerURL"]
 
-            new_dlc_url = dlc_url
+                if len(new_server_url) > len(old_server_url):
+                    raise ValueError("New MayhemServerURL is too long. Keep it short.")
 
-            old_dlc_url = "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/"
-            old_length = len(old_dlc_url)
-            new_length = len(new_dlc_url)
+                plist_data["MayhemServerURL"] = new_server_url
+            else:
+                print("Key 'MayhemServerURL' not found.")
 
-            if new_length > old_length:
-                raise ValueError("New DLCLocation URL is too long. Keep it short.")
+            new_dlc_url = ""
+            if "DLCLocation" in plist_data:
+                # Store the the DLC URL.
+                plist_data["DLCLocation"] = dlc_url
 
-            new_dlc_url = expand_url(new_dlc_url, old_length)
+                new_dlc_url = dlc_url
 
-        else:
-            print("Key 'DLCLocation' not found.")
+                old_dlc_url = "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/"
+                old_length = len(old_dlc_url)
+                new_length = len(new_dlc_url)
 
-        # Save updated Info.plist
-        with open(plist_path, "wb") as plist_file:
-            plistlib.dump(plist_data, plist_file)
+                if new_length > old_length:
+                    raise ValueError("New DLCLocation URL is too long. Keep it short.")
 
-        print(f"Updated {plist_path} successfully.")
-        print(f"New MayhemServerURL: {new_server_url}")
-        print(f"New DLCLocation: {dlc_url}")
+                new_dlc_url = expand_url(new_dlc_url, old_length)
 
-        # Edit the binary file
-        old_urls = [
-            "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/",
-            "https://syn-dir.sn.eamobile.com",
-            "https://ping1.tnt-ea.com",
-        ]
-        new_urls = [new_dlc_url, new_server_url, "https://google.com"]
+            else:
+                print("Key 'DLCLocation' not found.")
 
-        status("Step 3/4: Binary-patching the app (URLs + signature bypass)...")
-        with open(binary_path, "rb") as file:
-            content = bytearray(file.read())
+            # Save updated Info.plist
+            with open(plist_path, "wb") as plist_file:
+                plistlib.dump(plist_data, plist_file)
 
-        # Replace URLs in the binary
-        for old_url, new_url in zip(old_urls, new_urls):
-            old_length = len(old_url)
-            new_length = len(new_url)
+            print(f"Updated {plist_path} successfully.")
+            print(f"New MayhemServerURL: {new_server_url}")
+            print(f"New DLCLocation: {dlc_url}")
 
-            new_url = expand_url(new_url, old_length)
+            # Edit the binary file
+            old_urls = [
+                "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/",
+                "https://syn-dir.sn.eamobile.com",
+                "https://ping1.tnt-ea.com",
+            ]
+            new_urls = [new_dlc_url, new_server_url, "https://google.com"]
 
-            # Encode and replace
-            old_url_bytes = old_url.encode()
-            new_url_bytes = new_url.encode()
+            status("Step 3/4: Binary-patching the app (URLs + signature bypass)...")
+            with open(binary_path, "rb") as file:
+                content = bytearray(file.read())
 
-            content = content.replace(old_url_bytes, new_url_bytes)
+            # Replace URLs in the binary
+            for old_url, new_url in zip(old_urls, new_urls):
+                old_length = len(old_url)
+                new_length = len(new_url)
 
-        # Save edited binary
-        with open(binary_path, "wb") as file:
-            file.write(content)
+                new_url = expand_url(new_url, old_length)
 
-        # Ignore IndexFileSig. Thanks SpAnser!
-        with open(binary_path, "rb+") as file:
-            print("Bypass IndexFileSig on IOS!")
-            file.seek(9623264)
-            file.write(b"\x01\x00\x00\x14")
+                # Encode and replace
+                old_url_bytes = old_url.encode()
+                new_url_bytes = new_url.encode()
 
-        print(f"Updated {binary_path} successfully.")
+                content = content.replace(old_url_bytes, new_url_bytes)
+
+            # Save edited binary
+            with open(binary_path, "wb") as file:
+                file.write(content)
+
+            # Ignore IndexFileSig. Thanks SpAnser!
+            with open(binary_path, "rb+") as file:
+                print("Bypass IndexFileSig on IOS!")
+                file.seek(9623264)
+                file.write(b"\x01\x00\x00\x14")
+
+            print(f"Updated {binary_path} successfully.")
 
         # Package the IPA
         status("Step 4/4: Repackaging IPA...")

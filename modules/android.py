@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -138,15 +139,107 @@ def decompile_app(input_filename):
         check=True,
     )
 
+def is_offline_bridge_apk(decompiled_path="./tappedout"):
+    return os.path.isfile(os.path.join(decompiled_path, "assets", "tsto-offline.cfg"))
+
+
 def replace_and_log_urls(
     new_gameserver_url, new_dlcserver_url, new_appname, new_version
 ):
     """
     Replace server URLs in the decompiled APK and log only the replacements.
 
-    This primarily modifies text-based files (.smali, .xml, .txt, .yml).
-    It does NOT handle binary .so patching.
+    Supports both the original EA APK and the Springfield Offline/Search base APK
+    (which contains assets/tsto-offline.cfg).
     """
+    safe_pkg_suffix = re.sub(r"[^A-Za-z0-9_]", "_", new_appname) or "Tapped_Out"
+    if safe_pkg_suffix[0].isdigit():
+        safe_pkg_suffix = "_" + safe_pkg_suffix
+
+    if is_offline_bridge_apk("./tappedout"):
+        log = []
+
+        # 1) Update assets/tsto-offline.cfg
+        cfg_path = os.path.join("./tappedout", "assets", "tsto-offline.cfg")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8", errors="ignore") as f:
+                cfg_lines = f.readlines()
+            new_cfg_lines = []
+            for line in cfg_lines:
+                if line.startswith("server="):
+                    new_cfg_lines.append(f"server={new_gameserver_url}\n")
+                    log.append(f"Updated server={new_gameserver_url} in {cfg_path}")
+                elif line.startswith("dlc="):
+                    new_cfg_lines.append(f"dlc={new_dlcserver_url.rstrip('/')}\n")
+                    log.append(f"Updated dlc={new_dlcserver_url.rstrip('/')} in {cfg_path}")
+                else:
+                    new_cfg_lines.append(line)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.writelines(new_cfg_lines)
+
+        # 2) Detect existing subpackage under com/ea/game/simpsons4_row (e.g. Springfield_Offline)
+        base_pkg_dir = Path("./tappedout", "smali", "com", "ea", "game", "simpsons4_row")
+        old_suffix = "Springfield_Offline"
+        if base_pkg_dir.is_dir():
+            subdirs = [d.name for d in base_pkg_dir.iterdir() if d.is_dir()]
+            if len(subdirs) == 1:
+                old_suffix = subdirs[0]
+
+        replacements = {
+            f"com.ea.game.simpsons4_row.{old_suffix}": f"com.ea.game.simpsons4_row.{safe_pkg_suffix}",
+            f"com/ea/game/simpsons4_row/{old_suffix}": f"com/ea/game/simpsons4_row/{safe_pkg_suffix}",
+            "Springfield Offline</string>": new_appname + "</string>",
+            "Tapped Out</string>": new_appname + "</string>",
+            "Springfield</string>": new_appname + "</string>",
+            "4.70.5": new_version,
+            "4.69.5": new_version,
+        }
+
+        for root, _, files in os.walk("./tappedout/"):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if file_path.endswith((".xml", ".smali", ".txt", ".yml")):
+                    try:
+                        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                            content = f.read()
+                    except Exception as e:
+                        print(f"Failed to read file: {file_path}, Error: {e}")
+                        continue
+
+                    modified = False
+                    if file == "AndroidManifest.xml":
+                        new_content, n1 = re.subn(
+                            r'(<meta-data\s+android:name="DLCLocation"\s+android:value=")[^"]*(")',
+                            rf"\g<1>{new_dlcserver_url}\2",
+                            content,
+                        )
+                        new_content, n2 = re.subn(
+                            r'(<meta-data\s+android:name="CFBundleDisplayName"\s+android:value=")[^"]*(")',
+                            rf"\g<1>{new_appname}\2",
+                            new_content,
+                        )
+                        if n1 or n2:
+                            content = new_content
+                            modified = True
+                            log.append(f"Updated DLCLocation and CFBundleDisplayName in {file_path}")
+
+                    for original, replacement in replacements.items():
+                        if original in content and original != replacement:
+                            log.append(
+                                f"Replaced '{original}' with '{replacement}' in {file_path}"
+                            )
+                            content = content.replace(original, replacement)
+                            modified = True
+
+                    if modified:
+                        try:
+                            with open(file_path, "w", encoding="utf-8", errors="ignore") as f:
+                                f.write(content)
+                        except Exception as e:
+                            print(f"Failed to write to file: {file_path}, Error: {e}")
+
+        print("\n".join(log))
+        return
 
     replacements = {
         "https://prod.simpsons-ea.com": new_gameserver_url,
@@ -154,8 +247,8 @@ def replace_and_log_urls(
         "https://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/": new_dlcserver_url,  # Update dlc server url.
         "https://ping1.tnt-ea.com": new_gameserver_url,
         "https://www.google.com": new_gameserver_url,
-        "com.ea.game.simpsons4_row": f"com.ea.game.simpsons4_row.{new_appname.replace(' ', '_')}",
-        "com/ea/game/simpsons4_row": f"com/ea/game/simpsons4_row/{new_appname.replace(' ', '_')}",
+        "com.ea.game.simpsons4_row": f"com.ea.game.simpsons4_row.{safe_pkg_suffix}",
+        "com/ea/game/simpsons4_row": f"com/ea/game/simpsons4_row/{safe_pkg_suffix}",
         "Tapped Out</string>": new_appname + "</string>",
         "Springfield</string>": new_appname + "</string>",
         "4.69.5": new_version
@@ -259,6 +352,9 @@ def perform_binary_patching(decompiled_path, new_dlcserver_url):
     This approach does NOT rely on radare2. It locates the known original
     DLC string and replaces it with the user-provided new_dlcserver_url.
     """
+    if is_offline_bridge_apk(decompiled_path):
+        print("[INFO] Offline bridge APK detected (libtsto_offline.so); skipping libscorpio.so binary URL patch.")
+        return
 
     # List out all the known scorpio .so variants
     so_files = [
@@ -322,14 +418,24 @@ def recompile_app(input_filename, new_appname, status=print):
     """Rebuild the patched APK with apktool, then zipalign + sign it with
     uber-apk-signer (v1/v2/v3 - required for Android 11+/MuMu)."""
 
+    safe_pkg_suffix = re.sub(r"[^A-Za-z0-9_]", "_", new_appname) or "Tapped_Out"
+    if safe_pkg_suffix[0].isdigit():
+        safe_pkg_suffix = "_" + safe_pkg_suffix
+
     # Produce unique apk.
     base_package_path = Path("tappedout", "smali", "com", "ea", "game", "simpsons4_row")
-    files = list(base_package_path.iterdir())
-    target = Path(base_package_path, new_appname.replace(" ", "_"))
-    target.mkdir()
-
-    for file in files:
-        os.rename(file, Path(target, file.name))
+    if base_package_path.is_dir():
+        target = Path(base_package_path, safe_pkg_suffix)
+        if is_offline_bridge_apk("tappedout"):
+            subdirs = [d for d in base_package_path.iterdir() if d.is_dir()]
+            if len(subdirs) == 1 and subdirs[0] != target:
+                os.rename(subdirs[0], target)
+        else:
+            files = list(base_package_path.iterdir())
+            target.mkdir(exist_ok=True)
+            for file in files:
+                if file != target:
+                    os.rename(file, Path(target, file.name))
 
     safe_name = new_appname.replace(" ", "_")
     output_filename = f"{safe_name}.apk"

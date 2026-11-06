@@ -13,8 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def default_source(ext):
-    candidate = PROJECT_ROOT / "Original Files" / f"tsto_original.{ext}"
-    return str(candidate) if candidate.exists() else ""
+    for name in (f"springfield.{ext}", f"tsto_original.{ext}"):
+        candidate = PROJECT_ROOT / "Original Files" / name
+        if candidate.exists():
+            return str(candidate)
+    return ""
 
 
 class _MainThreadMessageBox:
@@ -435,11 +438,11 @@ def start_apk_patcher():
             progress_bar,
             status_var,
             lambda status_cb: run_apk_script(
-                apk_entry.get().strip(),
-                gameserver_entry.get().strip(),
-                dlcserver_entry.get().strip(),
-                appname_entry.get().strip(),
-                version_entry.get().strip(),
+                resolve_value(apk_entry),
+                resolve_value(gameserver_entry),
+                resolve_value(dlcserver_entry),
+                resolve_value(appname_entry),
+                resolve_value(version_entry),
                 progress_bar,
                 resolve_icon(icon_entry),
                 status_cb,
@@ -589,12 +592,12 @@ def start_ipa_patcher():
             progress_bar,
             status_var,
             lambda status_cb: run_ipa_script(
-                ipa_entry.get().strip(),
-                gameserver_entry.get().strip(),
-                dlcserver_entry.get().strip(),
-                bundleid_entry.get().strip(),
-                appname_entry.get().strip(),
-                version_entry.get().strip(),
+                resolve_value(ipa_entry),
+                resolve_value(gameserver_entry),
+                resolve_value(dlcserver_entry),
+                resolve_value(bundleid_entry),
+                resolve_value(appname_entry),
+                resolve_value(version_entry),
                 resolve_icon(icon_entry),
                 status_cb,
             ),

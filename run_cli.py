@@ -44,8 +44,11 @@ class _ConsoleProgressBar:
 
 
 def default_source(ext):
-    candidate = PROJECT_ROOT / "Original Files" / f"tsto_original.{ext}"
-    return str(candidate) if candidate.exists() else None
+    for name in (f"springfield.{ext}", f"tsto_original.{ext}"):
+        candidate = PROJECT_ROOT / "Original Files" / name
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 def merge(arg_value, profile, key):
